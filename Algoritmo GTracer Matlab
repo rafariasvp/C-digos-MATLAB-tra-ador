@@ -1,0 +1,55 @@
+function Pam = GTracer_Core(V, Q, Voc_ref, Isc_ref, n_alvo, C_nom, k_inicial)
+    % Parâmetros (Definidos no 'Edit Data' como Parameters)
+    % Voc_ref, Isc_ref, C_nom, n_alvo, k_inicial
+    
+    persistent k Pam_atual n_n n_count last_Q ciclo_calibrado
+    
+    if isempty(k)
+        k = k_inicial;          % Fator inicial
+        n_n = 0;                
+        n_count = 0;            
+        ciclo_calibrado = false;
+        last_Q = false;
+        
+        % Cálculo inicial do período de amostragem
+        tn = k * (Voc_ref / Isc_ref) * C_nom; 
+        Pam_atual = tn / n_alvo; 
+    end
+
+    % Detectar início de carga (Borda de subida de Q)
+    if Q == 1 && last_Q == 0
+        n_count = 0;
+        n_n = 0;
+    end
+
+    % Durante a carga: contar amostras e achar n_n (onde V >= 0.99 Voc)
+    if Q == 1
+        % Incrementa contador baseado no passo da simulação
+        % Para ser preciso, n_count aqui representa o tempo decorrido
+        n_count = n_count + 1; 
+        
+        if V >= (0.85 * Voc_ref) && n_n == 0
+            % n_n é o índice do ponto onde atingiu a carga quase completa
+            % n_n = tempo_decorrido / Pam_atual
+            n_n = (n_count * 1e-4) / Pam_atual; 
+        end
+    end
+
+   % Ao fim da carga (Q vai para 0), atualiza k APENAS se n_n for válido
+if Q == 0 && last_Q == 1 && ~ciclo_calibrado
+    if n_n > 0  % SEGURANÇA: Só atualiza se atingiu 0.99 Voc
+        k = k * (n_n / n_alvo); 
+    else
+        % Se não atingiu, mantém o k inicial ou aumenta um pouco
+        k = k_inicial; 
+    end
+    
+    % Recalcula Pam e trava a calibração
+    tn_novo = k * (Voc_ref / Isc_ref) * C_nom;
+    Pam_atual = tn_novo / n_alvo;
+    ciclo_calibrado = true; 
+end
+
+    last_Q = Q;
+    Pam = Pam_atual;
+end
