@@ -1,0 +1,104 @@
+function [I, Voc_calc]= Modulo(V, G, T, P)
+    % Entradas:
+    % V = tensão (V)
+    % G = irradiância (W/m²)
+    % T = temperatura (°C)
+    % P = Estrutura de parâmetros
+
+    %% 1. Constantes Físicas e Ajuste de Temperatura
+    K_boltz = 1.3806503e-23;
+    q_elec  = 1.60217653e-19;
+    Ns      = 65; 
+    
+    TK = T + 273.15;
+    
+    %% 2. Desempacotamento dos Parâmetros
+    A1      = P.A_ref;
+    kv      = P.kv_T;
+    a_Voc   = P.kv_S;
+    I01_ref = P.Isat_ref;
+    Rs_T    = P.Rs_T_ref;                             
+    Rs_S    = P.Rs_S_ref;                              
+    
+    Tr = 273.15 + P.Tref;
+    Gr = P.Sref;
+    
+    % Parâmetros do Silício
+    Eg_0 = 1.1557;
+    alpha_varshni = 7.021e-4;
+    beta_varshni  = 1108;
+
+    %% 3. Cálculos Físicos
+    
+    % Bandgap
+    Eg_r = Eg_0 - (alpha_varshni * Tr^2) / (Tr + beta_varshni);
+    Eg_T = Eg_0 - (alpha_varshni * TK^2) / (TK + beta_varshni);
+    
+    % Tensão Térmica
+    Vt = (K_boltz * TK * Ns) / q_elec;
+    
+    % Isat
+    term_exp = exp( -(q_elec * (Eg_T/TK - Eg_r/Tr)) / (K_boltz * A1) );
+    Isat = I01_ref * term_exp * (TK/Tr)^3;
+    
+    % Resistências
+    Rs = (Rs_T * (1 + P.k_Rs * (TK-Tr)) + Rs_S * (G/Gr)^(P.gama_Rs));
+    Rp = (P.Rp_ref * (1 + P.k_Rp * (TK-Tr)) * (G/Gr)^(P.gama_Rp));
+    
+    % Isc e Voc
+    % Correção nos parênteses do log para garantir segurança
+    Voc = (P.Voc_ref + kv*(TK-Tr) + a_Voc*A1*Vt*log((G + 0.001)/Gr)); 
+    
+    Isc = (P.Isc_ref + P.ki * (TK-Tr)) * (G/Gr);
+    
+    % Fotocorrente (Ig)
+    % Proteção extra aqui também: se Isc for muito alto, exp explode.
+    arg_Ig = (Isc*Rs)/(A1*Vt);
+    arg_Ig = min(arg_Ig, 100);
+    Ig = Isc * (1 + (Rs/Rp)) + Isat * (exp(arg_Ig) - 1);
+
+    %% 4. Solver Numérico (Newton-Raphson)
+    
+    % Chute inicial
+    I_sim = Ig; 
+    max_i = 30;
+    
+    % Pré-ajuste (com proteção na exponencial)
+    arg_est = (V + Rs * I_sim)/Vt;
+    arg_est = min(arg_est, 100);
+    Id_est = Isat * (exp(arg_est) - 1);
+    
+    I_sim = Ig - Id_est - ((V + Rs * I_sim)/Rp);
+    
+    for i = 1:max_i
+        % Argumento da exponencial
+        arg = (V + I_sim*Rs)/(A1*Vt);
+        
+        % PROTEÇÃO CRÍTICA: Limita o expoente em 100
+        % (exp(100) já é um número astronomicamente grande, suficiente p/ simulação)
+        arg = min(arg, 100); 
+        
+        % Calcula uma única vez
+        exp_val = exp(arg);
+        
+        % Função f(I)
+        g_I = Ig - I_sim - Isat * (exp_val - 1) - (V + I_sim * Rs) / Rp;
+        
+        % Derivada f'(I)
+        dg_I = (-Rs * Isat * exp_val) / (A1 * Vt) - (Rs / Rp) - 1;
+        
+        % Passo de atualização
+        dI = - g_I / dg_I;
+        I_sim = I_sim + dI;
+        
+        % Critério de parada
+        if (abs(dI) < 1e-8)
+            break
+        end
+    end
+    
+    % Proteção final
+    I_sim = max(I_sim, 0);
+    I = I_sim;
+    Voc_calc=Voc;
+end
